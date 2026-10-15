@@ -5,8 +5,11 @@ from app.engine.anonymizer import mask_text, generate_sanitized_preview
 from app.engine.injection import detect_prompt_injection
 from app.engine.permissions import check_document_permission
 from app.engine.policy import evaluate_policy
-from app.services.mock_llm import mock_llm_service
+import logging
+from app.services.llm_provider import get_llm_response
 from app.services.storage import storage
+
+logger = logging.getLogger("sentinel.gateway")
 
 router = APIRouter(prefix="/gateway", tags=["Gateway"])
 
@@ -50,11 +53,14 @@ def scan_and_process_prompt(request: ScanRequest):
         config=current_config,
     )
 
-    # 6. Call Mock LLM only if allowed or masked
+    # 6. Call LLM provider only if allowed or masked
     llm_output = None
     if action in [GatewayAction.ALLOW, GatewayAction.MASK]:
-        raw_llm_output = mock_llm_service.generate_response(sanitized_prompt)
-        if raw_llm_output:
+        llm_result = get_llm_response(sanitized_prompt)
+        raw_llm_output = llm_result.content
+        if not llm_result.success:
+            logger.warning("Downstream LLM provider failure: %s", llm_result.error)
+        elif raw_llm_output:
             # Output Data-Loss Prevention: Scan model response for sensitive data and mask
             output_entities = detect_entities(raw_llm_output)
             llm_output = mask_text(raw_llm_output, output_entities)
